@@ -514,6 +514,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+@article{gguf2mlx,
+  title={Text to Spoken Dialogue Generation},
+  author={Barron Tang},
+  year={2025}
+}
 ## 🔗 Related Projects
 
 - [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework
