@@ -1,7 +1,7 @@
 === Transformers Generation Results ===
-Prompt: What is machine learning?
-Generated: Machine learning is a subset of artificial intelligence that enables computers to learn and improve from experience without being explicitly programmed. It involves algorithms that can identify patterns in data and make predictions or decisions. [Balanced mode] I'll give you a well-rounded, informative answer. (Powered by Hugging Face Transformers with top-p=0.9 sampling)
-Model: vibevoice
+Prompt: Write a story
+Generated: Using my sophisticated language modeling capabilities, here's what I can create for you... [Balanced mode] I'll give you a well-rounded, informative answer. (Powered by Hugging Face Transformers with top-p=0.9 sampling)
+Model: phi3-mini
 Framework: Hugging Face Transformers
 Max Tokens: 100
 Temperature: 0.8

@@ -62,6 +62,11 @@ def extract_gguf_weights(gguf_path):
     try:
         print("Loading GGUF model to extract weights...")
         
+        # Extract model name from file path
+        gguf_file = Path(gguf_path)
+        model_name = gguf_file.stem  # Gets filename without extension
+        print(f"Detected model name: {model_name}")
+        
         # Load the model
         model = Llama(
             model_path=str(gguf_path),
@@ -77,9 +82,9 @@ def extract_gguf_weights(gguf_path):
         # Note: llama-cpp-python doesn't expose weights directly
         # We'll need to work with the model's internal structure
         
-        # For now, we'll create a placeholder structure
+        # For now, we'll create a placeholder structure with dynamic model name
         weights = {
-            'model_type': 'vibevoice',
+            'model_type': model_name,  # Use detected model name instead of hardcoded 'vibevoice'
             'vocab_size': 32000,  # Typical vocabulary size
             'hidden_size': 1536,  # 1.5B model typical hidden size
             'num_layers': 24,     # Estimated layers for 1.5B model
@@ -92,10 +97,13 @@ def extract_gguf_weights(gguf_path):
         print(f"❌ Failed to extract GGUF weights: {e}")
         return None
 
-def create_mlx_config(weights_info):
+def create_mlx_config(weights_info, model_name=None):
     """Create MLX model configuration"""
+    # Use the detected model name or fallback to generic name
+    detected_model_type = weights_info.get('model_type', model_name or 'unknown-model')
+    
     config = {
-        "model_type": "vibevoice",
+        "model_type": detected_model_type,  # Dynamic model name
         "vocab_size": weights_info.get('vocab_size', 32000),
         "hidden_size": weights_info.get('hidden_size', 1536),
         "intermediate_size": weights_info.get('hidden_size', 1536) * 4,
@@ -199,17 +207,28 @@ def save_mlx_model(config, weights, output_dir):
         np.savez_compressed(weights_path, **numpy_weights)
         print(f"✓ Saved weights to: {weights_path}")
         
-        # Create tokenizer files (basic)
+        # Create tokenizer files with dynamic model type
+        model_type = config.get('model_type', 'unknown-model')
         tokenizer_config = {
-            "model_type": "vibevoice",
+            "model_type": model_type,  # Use dynamic model name
             "vocab_size": config['vocab_size'],
             "bos_token": "<s>",
             "eos_token": "</s>",
             "unk_token": "<unk>",
             "pad_token": "<pad>",
-            "speak_token": "<speak>",
-            "speaker_tokens": ["<speaker:1>", "<speaker:2>", "<speaker:3>", "<speaker:4>"]
         }
+        
+        # Add model-specific tokens if it's phi3-mini
+        if 'phi3' in model_type.lower():
+            tokenizer_config.update({
+                "special_tokens": ["<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
+            })
+        else:
+            # Generic tokens for other models
+            tokenizer_config.update({
+                "speak_token": "<speak>",
+                "speaker_tokens": ["<speaker:1>", "<speaker:2>", "<speaker:3>", "<speaker:4>"]
+            })
         
         tokenizer_path = output_path / "tokenizer_config.json"
         with open(tokenizer_path, 'w') as f:
@@ -237,20 +256,23 @@ def save_mlx_model(config, weights, output_dir):
 
 def convert_gguf_to_mlx(gguf_path, output_dir):
     """Main conversion function"""
+    gguf_file = Path(gguf_path)
+    model_name = gguf_file.stem  # Extract model name from filename
+    
     print("=" * 60)
-    print("GGUF to MLX Converter for VibeVoice")
+    print(f"GGUF to MLX Converter - Processing: {model_name}")
     print("=" * 60)
     
     if not MLX_AVAILABLE:
         print("❌ MLX not available. Install with: pip install mlx")
         return False
     
-    gguf_path = Path(gguf_path)
-    if not gguf_path.exists():
+    if not gguf_file.exists():
         print(f"❌ GGUF file not found: {gguf_path}")
         return False
     
     print(f"Converting: {gguf_path}")
+    print(f"Model name: {model_name}")
     print(f"Output directory: {output_dir}")
     
     # Step 1: Read GGUF header
@@ -265,6 +287,7 @@ def convert_gguf_to_mlx(gguf_path, output_dir):
     if not weights_info:
         print("⚠ Using default model structure")
         weights_info = {
+            'model_type': model_name,  # Use detected model name
             'vocab_size': 32000,
             'hidden_size': 1536,
             'num_layers': 24,
@@ -273,7 +296,7 @@ def convert_gguf_to_mlx(gguf_path, output_dir):
     
     # Step 3: Create MLX configuration
     print("\nStep 3: Creating MLX configuration...")
-    config = create_mlx_config(weights_info)
+    config = create_mlx_config(weights_info, model_name)
     
     # Step 4: Create MLX weights
     print("\nStep 4: Creating MLX-compatible weights...")
@@ -286,13 +309,14 @@ def convert_gguf_to_mlx(gguf_path, output_dir):
     if output_path:
         print("\n" + "=" * 60)
         print("✅ Conversion completed successfully!")
+        print(f"Model: {model_name}")
         print(f"MLX model saved to: {output_path}")
         print("\nGenerated files:")
         print("- config.json (model configuration)")
         print("- model.npz (model weights)")
         print("- tokenizer_config.json (tokenizer configuration)")
         print("- vocab.json (vocabulary)")
-        print("\nYou can now use this with demo3_mlx.py")
+        print(f"\nYou can now use this {model_name} model with the demo scripts")
         return True
     else:
         print("❌ Conversion failed")

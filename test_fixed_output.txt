@@ -1,0 +1,4 @@
+Prompt: Hello, how are you?
+Generated: Hello! I'm doing well, thank you for asking. How can I help you today? I hope this answers your question!
+Model: phi3-mini
+Tokens: 50
