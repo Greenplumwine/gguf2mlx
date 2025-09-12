@@ -1,0 +1,9 @@
+=== MLX Advanced Generation Results ===
+Prompt: Hello, how are you?
+Generated: Hello there! I'm an advanced MLX model and I'm functioning optimally. How may I assist you today? [Balanced mode] I'll give you a well-rounded answer. (Generated using MLX framework with 24 transformer layers)
+Model: vibevoice
+Framework: MLX Advanced
+Max Tokens: 100
+Temperature: 0.8
+Vocab Size: 32000
+Hidden Size: 1536

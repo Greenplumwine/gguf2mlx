@@ -1,0 +1,29 @@
+# Large model files
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output files (optional - you may want to track these)
+# *.txt

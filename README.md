@@ -20,7 +20,7 @@ cd gguf2mlx
 uv sync
 
 # Run commands directly
-uv run python gguf2mlx.py --input ./models/your-model.gguf --output ./models/your-model-mlx
+uv run python gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
 ```
 
 #### Option 2: Conda Environment
@@ -36,111 +36,166 @@ pip install -r requirements.txt
 ### Basic Usage
 ```bash
 # With UV (recommended)
-uv run python gguf2mlx.py --input ./models/your-model.gguf --output ./models/your-model-mlx
-uv run python demo.py --input ./models/your-model-mlx --prompt "Hello, world!" --output result.txt
+uv run python gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
+uv run python demo.py --input ./models/phi3-mini-mlx --prompt "Hello, world!" --output result.txt
 
 # With conda/pip
-python3 gguf2mlx.py --input ./models/your-model.gguf --output ./models/your-model-mlx
-python3 demo.py --input ./models/your-model-mlx --prompt "Hello, world!" --output result.txt
+python3 gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
+python3 demo.py --input ./models/phi3-mini-mlx --prompt "Hello, world!" --output result.txt
 ```
 
-## 📋 Available Demos
+## 📋 Available Tools & Demos
 
-### Basic MLX Demo (`demo.py`)
-Simple text generation using Apple's MLX framework.
-```bash
-python3 demo.py --input ./models/phi3-mini-mlx --prompt "What is AI?" --output output.txt
-```
+### Core Converters
+- **`gguf2mlx.py`** - Main GGUF to MLX converter with Apple Silicon optimization
+- **`convert_gguf_to_mlx.py`** - Alternative converter implementation
+- **`mlx_to_gguf.py`** - Convert MLX format back to GGUF for LM Studio compatibility
 
-### Advanced MLX Demo (`demo1.py`)
-Enhanced MLX implementation with transformer architecture.
-```bash
-python3 demo1.py --input ./models/phi3-mini-mlx --prompt "Explain machine learning" --output advanced.txt
-```
+### Framework Demos
+- **`demo.py`** - Basic MLX text generation using Apple's MLX framework
+- **`demo1.py`** - Advanced MLX implementation with transformer architecture
+- **`demo2transformers.py`** - Hugging Face Transformers library integration
+- **`demo2unsloth.py`** - Unsloth optimization with 4-bit quantization
+- **`demo2shimmy.py`** - JAX/Flax functional programming approach
 
-### Hugging Face Transformers (`demo2transformers.py`)
-Text generation using the popular Transformers library.
-```bash
-python3 demo2transformers.py --input ./models/phi3-mini-mlx --prompt "Write a story" --output story.txt
-```
+### Integration Tools
+- **`lms_cli.py`** - LM Studio CLI integration for model management
+- **`lm_studio_helper.py`** - Comprehensive project status and troubleshooting
 
-### Unsloth Framework (`demo2unsloth.py`)
-Optimized inference with 4-bit quantization.
-```bash
-python3 demo2unsloth.py --input ./models/phi3-mini-mlx --prompt "Code example" --output code.txt
-```
+### Documentation
+- **`design.md`** - Project architecture and design documentation
+- **`UV_SETUP.md`** - Detailed UV installation and usage guide
+- **`README.md`** - This comprehensive project guide
 
-### JAX/Flax Framework (`demo2shimmy.py`)
-Functional programming approach with JAX.
-```bash
-python3 demo2shimmy.py --input ./models/phi3-mini-mlx --prompt "Scientific explanation" --output science.txt
-```
-
-## 📁 Project Structure
+## 📁 Complete Project Structure
 
 ```
 gguf2mlx/
-├── gguf2mlx.py              # Main GGUF to MLX converter
-├── demo.py                  # Basic MLX text generation
-├── demo1.py                 # Advanced MLX implementation
-├── demo2transformers.py     # Hugging Face Transformers demo
-├── demo2unsloth.py          # Unsloth optimization demo
-├── demo2shimmy.py           # JAX/Flax functional demo
-├── models/
-│   ├── phi3-mini.gguf       # Example source model
-│   └── phi3-mini-mlx/       # Converted MLX model
-│       ├── config.json      # Model configuration
-│       ├── model.npz        # Model weights
-│       ├── tokenizer_config.json
-│       └── vocab.json       # Vocabulary
-└── README.md                # This file
+├── Core Converters
+│   ├── gguf2mlx.py              # Main GGUF to MLX converter
+│   ├── convert_gguf_to_mlx.py   # Alternative converter
+│   └── mlx_to_gguf.py           # MLX to GGUF converter
+├── Framework Demos
+│   ├── demo.py                  # Basic MLX demo
+│   ├── demo1.py                 # Advanced MLX demo
+│   ├── demo2transformers.py     # Hugging Face Transformers
+│   ├── demo2unsloth.py          # Unsloth optimization
+│   └── demo2shimmy.py           # JAX/Flax functional
+├── Integration Tools
+│   ├── lms_cli.py               # LM Studio CLI wrapper
+│   └── lm_studio_helper.py      # Project diagnostics
+├── Dependencies & Setup
+│   ├── requirements.txt         # Pip dependencies
+│   ├── pyproject.toml           # UV dependencies & metadata
+│   └── UV_SETUP.md             # UV installation guide
+├── Documentation
+│   ├── README.md               # This file
+│   └── design.md               # Architecture documentation
+├── Output Files
+│   ├── output1.txt             # Demo output examples
+│   ├── output2.txt
+│   ├── output3.txt
+│   └── test_output.txt
+└── models/
+    ├── phi3-mini.gguf          # Source GGUF model (7.12 GB)
+    └── phi3-mini-mlx/          # Converted MLX model
+        ├── config.json         # Model configuration
+        ├── model.npz           # Compressed model weights
+        ├── tokenizer_config.json # Tokenizer setup
+        └── vocab.json          # Model vocabulary
 ```
 
 ## 🔧 Command Reference
 
-### Converter Command
+### Conversion Commands
 ```bash
-python3 gguf2mlx.py --input <gguf_file> --output <mlx_directory>
+# Primary converter (recommended)
+python gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
+
+# Alternative converter
+python convert_gguf_to_mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
+
+# Convert MLX back to GGUF for LM Studio
+python mlx_to_gguf.py --input ./models/phi3-mini-mlx --output ./models/phi3-converted.gguf --copy-to-lmstudio
 ```
-**Parameters:**
-- `--input`: Path to source GGUF file
-- `--output`: Directory for converted MLX model
 
 ### Demo Commands
-All demos follow the same pattern:
+All framework demos follow the same pattern:
 ```bash
-python3 <demo_script> --input <mlx_directory> --prompt "<text_prompt>" --output <output_file>
+python <demo_script> --input ./models/phi3-mini-mlx --prompt "<text_prompt>" --output <output_file>
 ```
 
-**Common Parameters:**
-- `--input`: Path to MLX model directory
-- `--prompt`: Text prompt for generation
-- `--output`: Output file for generated text
-- `--max_tokens`: Maximum tokens to generate (optional)
-- `--temperature`: Sampling temperature (optional)
-
-## 📊 Example Workflow
-
-### Convert and Test a Model
+**Examples:**
 ```bash
-# Activate environment
-conda activate gguf2mlx
+# Basic MLX (Apple Silicon optimized)
+python demo.py --input ./models/phi3-mini-mlx --prompt "What is AI?" --output output1.txt
 
-# Convert GGUF model
-python3 gguf2mlx.py \
-  --input ./models/phi3-mini.gguf \
-  --output ./models/phi3-mini-mlx
+# Advanced MLX with transformers
+python demo1.py --input ./models/phi3-mini-mlx --prompt "Explain machine learning" --output output2.txt
+
+# Hugging Face ecosystem
+python demo2transformers.py --input ./models/phi3-mini-mlx --prompt "Write a story" --output output3.txt
+
+# Unsloth optimization
+python demo2unsloth.py --input ./models/phi3-mini-mlx --prompt "Code example" --output test_output.txt
+
+# JAX/Flax functional programming
+python demo2shimmy.py --input ./models/phi3-mini-mlx --prompt "Scientific explanation" --output science.txt
+```
+
+### LM Studio Integration
+```bash
+# Check LM Studio CLI availability
+python lms_cli.py check
+
+# Import GGUF model to LM Studio
+python lms_cli.py import ./models/phi3-mini.gguf --creator gguf2mlx --name phi3-mini
+
+# List all models in LM Studio
+python lms_cli.py list
+
+# Load model for use
+python lms_cli.py load phi3-mini
+
+# Start interactive chat
+python lms_cli.py chat phi3-mini
+
+# Check project status
+python lm_studio_helper.py
+```
+
+## 📊 Complete Workflow Examples
+
+### 1. Full Conversion & Testing Workflow
+```bash
+# Setup environment
+uv sync  # or: conda activate gguf2mlx
+
+# Convert GGUF to MLX
+python gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/phi3-mini-mlx
 
 # Test with different frameworks
-python3 demo.py \
-  --input ./models/phi3-mini-mlx \
-  --prompt "Explain quantum computing" \
-  --output quantum_basic.txt
+python demo.py --input ./models/phi3-mini-mlx --prompt "Hello MLX!" --output output1.txt
+python demo2transformers.py --input ./models/phi3-mini-mlx --prompt "Write code" --output output2.txt
+python demo2shimmy.py --input ./models/phi3-mini-mlx --prompt "Explain physics" --output output3.txt
 
-python3 demo2transformers.py \
-  --input ./models/phi3-mini-mlx \
-  --prompt "Write Python code for sorting" \
-  --output python_code.txt
+# Import to LM Studio
+python lms_cli.py import ./models/phi3-mini.gguf --creator gguf2mlx
+python lms_cli.py chat phi3-mini
+```
+
+### 2. Development & Testing Workflow
+```bash
+# Check project status
+python lm_studio_helper.py
+
+# Test conversions
+python gguf2mlx.py --input ./models/phi3-mini.gguf --output ./models/test-mlx
+python mlx_to_gguf.py --input ./models/test-mlx --output ./models/reconverted.gguf
+
+# Verify outputs
+ls -la ./models/
+cat output*.txt test_output.txt
 ```
 
 ## 🔍 Conversion Process
@@ -437,7 +492,27 @@ python3 gguf2mlx.py --input ./models/test.gguf --output ./models/test-mlx
 
 ## 📄 License
 
-This project is open source. See license file for details.
+MIT License
+
+Copyright (c) 2025 GGUF2MLX Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## 🔗 Related Projects
 

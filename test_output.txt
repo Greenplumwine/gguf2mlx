@@ -1,0 +1,4 @@
+Prompt: What is artificial intelligence?
+Generated: That's an interesting question. Let me think about that... I hope this answers your question!
+Model: vibevoice
+Tokens: 50
