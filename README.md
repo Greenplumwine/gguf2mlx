@@ -514,11 +514,39 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@article{gguf2mlx,
-  title={Text to Spoken Dialogue Generation},
-  author={Barron Tang},
-  year={2025}
+## 📚 Citation
+
+If you use GGUF2MLX in your research or projects, please cite:
+
+```bibtex
+@software{gguf2mlx2025,
+  author = {Tang, Barron},
+  title = {GGUF2MLX: GGUF to MLX Converter for Apple Silicon},
+  year = {2025},
+  url = {https://github.com/barrontang/gguf2mlx},
+  note = {A comprehensive toolkit for converting GGUF models to MLX format with multi-framework support},
+  version = {1.0.0},
+  license = {MIT}
 }
+```
+
+**Alternative citation formats:**
+
+**APA Style:**
+```
+Tang, B. (2025). GGUF2MLX: GGUF to MLX Converter for Apple Silicon (Version 1.0.0) [Computer software]. https://github.com/barrontang/gguf2mlx
+```
+
+**IEEE Style:**
+```
+B. Tang, "GGUF2MLX: GGUF to MLX Converter for Apple Silicon," 2025. [Online]. Available: https://github.com/barrontang/gguf2mlx
+```
+
+**Chicago Style:**
+```
+Tang, Barron. "GGUF2MLX: GGUF to MLX Converter for Apple Silicon." Computer software. Version 1.0.0. 2025. https://github.com/barrontang/gguf2mlx.
+```
+
 ## 🔗 Related Projects
 
 - [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework
