@@ -1,7 +1,10 @@
+# Models directory (contains large files)
+models/
+
 # Large model files
-models/*.gguf
-models/*.bin
-models/*.safetensors
+*.gguf
+*.bin
+*.safetensors
 
 # Python cache
 __pycache__/
