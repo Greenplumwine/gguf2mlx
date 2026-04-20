@@ -113,23 +113,24 @@ class TestImportModelToLmstudio(unittest.TestCase):
 
     def test_model_name_defaults_to_stem(self):
         """When model_name is None, it should be derived from the filename stem."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".gguf", prefix="phi3-mini") as f:
-            f.write(b"GGUF" + b"\x00" * 100)
-            tmp = f.name
-        try:
-            mock_proc = MagicMock()
-            mock_proc.returncode = 0
-            mock_proc.communicate.return_value = ("ok", "")
-            mock_proc.stdin = MagicMock()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = os.path.join(tmpdir, "phi3-mini.gguf")
+            with open(tmp, "wb") as f:
+                f.write(b"GGUF" + b"\x00" * 100)
+            try:
+                mock_proc = MagicMock()
+                mock_proc.returncode = 0
+                mock_proc.communicate.return_value = ("ok", "")
+                mock_proc.stdin = MagicMock()
 
-            with patch("lms_cli.subprocess.Popen", return_value=mock_proc) as mock_popen:
-                lms_cli.import_model_to_lmstudio(tmp, model_name=None)
-                # Verify lms import was called with the file path
-                args = mock_popen.call_args[0][0]
-                self.assertIn("import", args)
-                self.assertIn(tmp, args)
-        finally:
-            os.unlink(tmp)
+                with patch("lms_cli.subprocess.Popen", return_value=mock_proc) as mock_popen:
+                    lms_cli.import_model_to_lmstudio(tmp, model_name=None)
+                    # Verify lms import was called with the file path
+                    args = mock_popen.call_args[0][0]
+                    self.assertIn("import", args)
+                    self.assertIn(tmp, args)
+            finally:
+                os.unlink(tmp)
 
     def test_copy_mode_adds_copy_flag(self):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".gguf") as f:

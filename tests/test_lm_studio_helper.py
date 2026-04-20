@@ -77,11 +77,11 @@ class TestCheckGgufFileStatus(unittest.TestCase):
 
     def test_returns_true_for_valid_gguf_with_sufficient_size(self):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".gguf") as f:
-            # Write valid magic + padding to exceed 100 MB threshold check
-            # Actually, we just need > 1 MB and valid GGUF magic
+            # Write valid GGUF magic then seek to 200 MB to create a sparse file
             content = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0) + struct.pack("<Q", 0)
-            content += b"\x00" * (200 * 1024 * 1024)  # 200 MB padding
             f.write(content)
+            f.seek(200 * 1024 * 1024)
+            f.write(b"\x00")
             tmp = f.name
         try:
             result = lm_studio_helper.check_gguf_file_status(tmp)
