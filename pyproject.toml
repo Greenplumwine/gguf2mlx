@@ -18,38 +18,41 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 dependencies = [
     # Core ML Framework - Apple Silicon optimized
-    "mlx>=0.29.1",
-    
+    "mlx>=0.31.1",
+    "mlx-lm>=0.31.0",
+
     # Numerical computing foundation
-    "numpy>=2.3.0",
-    
+    "numpy>=2.4.0",
+
     # PyTorch ecosystem - ARM64 optimized
-    "torch>=2.8.0",
-    "torchvision>=0.23.0", 
-    "torchaudio>=2.8.0",
-    
+    "torch>=2.11.0",
+    "torchvision>=0.26.0",
+    "torchaudio>=2.11.0",
+
     # Hugging Face ecosystem
-    "transformers>=4.56.0",
-    "tokenizers>=0.22.0",
-    "safetensors>=0.6.0",
-    "huggingface-hub>=0.34.0",
-    
+    "transformers>=5.0.0",
+    "tokenizers>=0.25.0",
+    "safetensors>=0.8.0",
+    "huggingface-hub>=1.0.0",
+
     # JAX ecosystem for functional programming
-    "jax>=0.7.1",
-    "jaxlib>=0.7.1",
-    "flax>=0.11.2",
-    "optax>=0.2.5",
-    
+    "jax>=0.8.0",
+    "jaxlib>=0.8.0",
+    "flax>=0.12.0",
+    "optax>=0.3.0",
+
     # Scientific computing
-    "scipy>=1.16.0",
-    "ml-dtypes>=0.5.0",
-    
+    "scipy>=1.17.0",
+    "ml-dtypes>=0.6.0",
+
     # Utilities
     "tqdm>=4.67.0",
     "pyyaml>=6.0.0",

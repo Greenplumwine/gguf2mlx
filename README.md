@@ -5,8 +5,8 @@ Convert GGUF (GPT-Generated Unified Format) models to MLX format for optimized i
 ## 🚀 Quick Start
 
 ### Prerequisites
-- macOS with Apple Silicon (M1/M2/M3)
-- Python 3.11+ (recommended: 3.11.13)
+- macOS with Apple Silicon (M1/M2/M3/M4)
+- Python 3.11+ (tested up to 3.14.3)
 
 ### Installation Options
 
@@ -31,6 +31,18 @@ conda activate gguf2mlx
 
 # Install dependencies
 pip install -r requirements.txt
+```
+
+#### Using mlx-lm (Apple's Official Tool)
+`mlx-lm` provides the official `mlx_lm.convert` command for GGUF-to-MLX conversion, which is often more reliable for supported model architectures:
+```bash
+pip install mlx-lm>=0.31.0
+
+# Convert a Hugging Face model directly
+python -m mlx_lm.convert --hf-path <model-id> -q
+
+# Use with the mlx_lm generate command
+python -m mlx_lm.generate --model <converted-model-path> --prompt "Hello, world!"
 ```
 
 ### Basic Usage
@@ -422,6 +434,11 @@ python lms_cli.py list
 - ✅ 2x inference speedup
 - ✅ Memory optimization
 
+### Ollama (MLX Backend - March 2026)
+- ✅ Native MLX backend on Apple Silicon
+- ✅ Seamless GGUF model loading
+- ✅ Local inference with Metal acceleration
+
 ## 🎯 Performance Optimization
 
 ### Apple Silicon Benefits
@@ -550,13 +567,15 @@ Tang, Barron. "GGUF2MLX: GGUF to MLX Converter for Apple Silicon." Computer soft
 ## 🔗 Related Projects
 
 - [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework
+- [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) - Official MLX LLM tools (convert, generate, fine-tune)
 - [Transformers](https://github.com/huggingface/transformers) - Hugging Face library
 - [JAX](https://github.com/google/jax) - Google's ML framework
 - [Unsloth](https://github.com/unslothai/unsloth) - Optimization framework
+- [Ollama](https://ollama.com) - Now powered by MLX on Apple Silicon (March 2026)
 
 ---
 
 **Status**: ✅ Project Complete and Functional  
-**Last Updated**: September 12, 2025  
-**Python Version**: 3.11.13  
-**Tested Model**: phi3-mini.gguf# gguf2mlx
+**Last Updated**: April 20, 2026  
+**Python Version**: 3.11+ (tested up to 3.14.3)  
+**Tested Model**: phi3-mini.gguf

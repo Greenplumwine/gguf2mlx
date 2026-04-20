@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GGUF to MLX Converter for VibeVoice
-Converts VibeVoice GGUF model to MLX format for Apple Silicon optimization
+GGUF to MLX Converter
+Converts GGUF models to MLX format for Apple Silicon optimization
 """
 
 import os
@@ -58,10 +58,15 @@ def extract_gguf_weights(gguf_path):
     if not LLAMA_CPP_AVAILABLE:
         print("❌ llama-cpp-python required for GGUF extraction")
         return None
-    
+
     try:
         print("Loading GGUF model to extract weights...")
-        
+
+        # Extract model name from file path
+        gguf_file = Path(gguf_path)
+        model_name = gguf_file.stem  # Gets filename without extension
+        print(f"Detected model name: {model_name}")
+
         # Load the model
         model = Llama(
             model_path=str(gguf_path),
@@ -70,32 +75,35 @@ def extract_gguf_weights(gguf_path):
             n_gpu_layers=0,  # CPU only for extraction
             verbose=False
         )
-        
+
         print("✓ GGUF model loaded successfully")
-        
+
         # Try to access internal weights (this is implementation-specific)
         # Note: llama-cpp-python doesn't expose weights directly
         # We'll need to work with the model's internal structure
-        
-        # For now, we'll create a placeholder structure
+
+        # For now, we'll create a placeholder structure with dynamic model name
         weights = {
-            'model_type': 'vibevoice',
+            'model_type': model_name,  # Use detected model name instead of hardcoded value
             'vocab_size': 32000,  # Typical vocabulary size
             'hidden_size': 1536,  # 1.5B model typical hidden size
             'num_layers': 24,     # Estimated layers for 1.5B model
             'num_heads': 24,      # Typical attention heads
         }
-        
+
         return weights
-        
+
     except Exception as e:
         print(f"❌ Failed to extract GGUF weights: {e}")
         return None
 
-def create_mlx_config(weights_info):
+def create_mlx_config(weights_info, model_name=None):
     """Create MLX model configuration"""
+    # Use the detected model name or fallback to generic name
+    detected_model_type = weights_info.get('model_type', model_name or 'unknown-model')
+
     config = {
-        "model_type": "vibevoice",
+        "model_type": detected_model_type,
         "vocab_size": weights_info.get('vocab_size', 32000),
         "hidden_size": weights_info.get('hidden_size', 1536),
         "intermediate_size": weights_info.get('hidden_size', 1536) * 4,
@@ -199,17 +207,28 @@ def save_mlx_model(config, weights, output_dir):
         np.savez_compressed(weights_path, **numpy_weights)
         print(f"✓ Saved weights to: {weights_path}")
         
-        # Create tokenizer files (basic)
+        # Create tokenizer files with dynamic model type
+        model_type = config.get('model_type', 'unknown-model')
         tokenizer_config = {
-            "model_type": "vibevoice",
+            "model_type": model_type,
             "vocab_size": config['vocab_size'],
             "bos_token": "<s>",
             "eos_token": "</s>",
             "unk_token": "<unk>",
             "pad_token": "<pad>",
-            "speak_token": "<speak>",
-            "speaker_tokens": ["<speaker:1>", "<speaker:2>", "<speaker:3>", "<speaker:4>"]
         }
+
+        # Add model-specific tokens if it's phi3-mini
+        if 'phi3' in model_type.lower():
+            tokenizer_config.update({
+                "special_tokens": ["<|system|>", "<|user|>", "<|assistant|>", "<|end|>"]
+            })
+        else:
+            # Generic tokens for other models
+            tokenizer_config.update({
+                "speak_token": "<speak>",
+                "speaker_tokens": ["<speaker:1>", "<speaker:2>", "<speaker:3>", "<speaker:4>"]
+            })
         
         tokenizer_path = output_path / "tokenizer_config.json"
         with open(tokenizer_path, 'w') as f:
@@ -237,62 +256,67 @@ def save_mlx_model(config, weights, output_dir):
 
 def convert_gguf_to_mlx(gguf_path, output_dir):
     """Main conversion function"""
+    gguf_file = Path(gguf_path)
+    model_name = gguf_file.stem  # Extract model name from filename
+
     print("=" * 60)
-    print("GGUF to MLX Converter for VibeVoice")
+    print(f"GGUF to MLX Converter - Processing: {model_name}")
     print("=" * 60)
-    
+
     if not MLX_AVAILABLE:
         print("❌ MLX not available. Install with: pip install mlx")
         return False
-    
-    gguf_path = Path(gguf_path)
-    if not gguf_path.exists():
+
+    if not gguf_file.exists():
         print(f"❌ GGUF file not found: {gguf_path}")
         return False
-    
+
     print(f"Converting: {gguf_path}")
+    print(f"Model name: {model_name}")
     print(f"Output directory: {output_dir}")
-    
+
     # Step 1: Read GGUF header
     print("\nStep 1: Reading GGUF header...")
     header_info = read_gguf_header(gguf_path)
     if not header_info:
         return False
-    
+
     # Step 2: Extract weights (or create compatible structure)
     print("\nStep 2: Extracting model information...")
     weights_info = extract_gguf_weights(gguf_path)
     if not weights_info:
         print("⚠ Using default model structure")
         weights_info = {
+            'model_type': model_name,  # Use detected model name
             'vocab_size': 32000,
             'hidden_size': 1536,
             'num_layers': 24,
             'num_heads': 24
         }
-    
+
     # Step 3: Create MLX configuration
     print("\nStep 3: Creating MLX configuration...")
-    config = create_mlx_config(weights_info)
-    
+    config = create_mlx_config(weights_info, model_name)
+
     # Step 4: Create MLX weights
     print("\nStep 4: Creating MLX-compatible weights...")
     mlx_weights = create_dummy_mlx_weights(config)
-    
+
     # Step 5: Save MLX model
     print("\nStep 5: Saving MLX model...")
     output_path = save_mlx_model(config, mlx_weights, output_dir)
-    
+
     if output_path:
         print("\n" + "=" * 60)
         print("✅ Conversion completed successfully!")
+        print(f"Model: {model_name}")
         print(f"MLX model saved to: {output_path}")
         print("\nGenerated files:")
         print("- config.json (model configuration)")
         print("- model.npz (model weights)")
         print("- tokenizer_config.json (tokenizer configuration)")
         print("- vocab.json (vocabulary)")
-        print("\nYou can now use this with demo3_mlx.py")
+        print(f"\nYou can now use this {model_name} model with the demo scripts")
         return True
     else:
         print("❌ Conversion failed")
@@ -302,12 +326,10 @@ def main():
     """Main function"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Convert VibeVoice GGUF to MLX format")
-    parser.add_argument("--input", "-i", 
-                       default="./models/vibevoice-1.5b-bf16.gguf",
+    parser = argparse.ArgumentParser(description="Convert GGUF to MLX format")
+    parser.add_argument("--input", "-i", required=True,
                        help="Input GGUF file path")
-    parser.add_argument("--output", "-o", 
-                       default="./models/vibevoice-mlx",
+    parser.add_argument("--output", "-o", required=True,
                        help="Output MLX directory")
     
     args = parser.parse_args()
@@ -316,7 +338,7 @@ def main():
     
     if success:
         print(f"\n🎉 Ready to use with MLX!")
-        print(f"Try: python demo3_mlx.py --text 'Hello from MLX VibeVoice'")
+        print(f"Try: python demo.py --input {args.output} --prompt 'Hello from MLX' --output output.txt")
     else:
         print("❌ Conversion failed")
         sys.exit(1)

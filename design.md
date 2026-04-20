@@ -4,7 +4,7 @@
 This project converts GGUF (GPT-Generated Unified Format) files to MLX (Apple's Machine Learning Exchange) format, enabling optimized inference on Apple Silicon devices. The project includes multiple demo implementations showcasing different ML frameworks.
 
 ## Project Status: ✅ COMPLETED
-- Environment: Python 3.11.13 conda environment
+- Environment: Python 3.11+ (tested up to 3.14.3)
 - Tested with: phi3-mini.gguf model (successfully converted)
 - All demos functional with meaningful text generation
 
@@ -76,7 +76,7 @@ This project converts GGUF (GPT-Generated Unified Format) files to MLX (Apple's 
 ## Environment Setup
 
 ### Required Python Version
-- **Python 3.11.13** (recommended for optimal ML framework compatibility)
+- **Python 3.11+** (tested up to 3.14.3, recommended for optimal ML framework compatibility)
 
 ### Conda Environment Creation
 ```bash
@@ -97,11 +97,13 @@ pip install jax flax optax
 ```
 
 ### Successfully Installed Packages
-- MLX 0.29.1 (with Metal GPU acceleration)
-- PyTorch 2.8.0 (ARM64 optimized)
-- Transformers 4.56.1
-- JAX 0.7.1 + Flax 0.11.2
-- NumPy 2.3.3
+- MLX 0.31.1 (with Metal GPU acceleration)
+- mlx-lm 0.31.0 (official GGUF/MLX conversion tool from Apple)
+- PyTorch 2.11.0 (ARM64 optimized)
+- Transformers 5.5.4
+- JAX 0.8.0 + Flax 0.12.0
+- NumPy 2.4.4
+- huggingface-hub 1.11.0
 
 ## File Structure
 ```
