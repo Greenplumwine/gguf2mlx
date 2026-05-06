@@ -1,0 +1,991 @@
+#!/usr/bin/env python3
+"""
+GGUF to MLX Converter v2.0
+Converts GGUF models to MLX format (safetensors) for Apple Silicon inference.
+
+Phase 1: Real weight extraction, safetensors output, architecture detection,
+         real tokenizer extraction.
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+import numpy as np
+
+# ---------------------------------------------------------------------------
+# Optional imports with friendly error messages
+# ---------------------------------------------------------------------------
+
+try:
+    import mlx.core as mx
+
+    MLX_AVAILABLE = True
+except ImportError:
+    MLX_AVAILABLE = False
+    # We can still convert without MLX (just won't verify)
+
+try:
+    from gguf import GGUFReader
+    from gguf.constants import GGMLQuantizationType
+    from gguf.quants import dequantize
+
+    GGUF_AVAILABLE = True
+except ImportError:
+    GGUF_AVAILABLE = False
+    print("❌ gguf library required. Install: pip install gguf>=0.18.0")
+    sys.exit(1)
+
+try:
+    from safetensors.numpy import save_file as save_safetensors
+    from safetensors import safe_open
+
+    SAFETENSORS_AVAILABLE = True
+except ImportError:
+    SAFETENSORS_AVAILABLE = False
+    print("❌ safetensors library required. Install: pip install safetensors")
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# GGUF metadata helpers
+# ---------------------------------------------------------------------------
+
+
+def get_metadata_str(reader: GGUFReader, key: str) -> Optional[str]:
+    """Extract a string metadata value from GGUF fields."""
+    field = reader.get_field(key)
+    if field is None:
+        return None
+    val = field.contents()
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace")
+    return str(val) if val is not None else None
+
+
+def get_metadata_int(reader: GGUFReader, key: str) -> Optional[int]:
+    """Extract an integer metadata value from GGUF fields."""
+    field = reader.get_field(key)
+    if field is None:
+        return None
+    val = field.contents()
+    if val is None:
+        return None
+    if isinstance(val, np.ndarray):
+        return int(val.flat[0]) if val.size > 0 else None
+    return int(val)
+
+
+def get_metadata_float(reader: GGUFReader, key: str) -> Optional[float]:
+    """Extract a float metadata value from GGUF fields."""
+    field = reader.get_field(key)
+    if field is None:
+        return None
+    val = field.contents()
+    if val is None:
+        return None
+    if isinstance(val, np.ndarray):
+        return float(val.flat[0]) if val.size > 0 else None
+    return float(val)
+
+
+def get_metadata_array_str(reader: GGUFReader, key: str) -> list[str]:
+    """Extract a string array from GGUF fields (e.g., tokenizer tokens)."""
+    field = reader.get_field(key)
+    if field is None:
+        return []
+    try:
+        vals = field.contents()
+        if isinstance(vals, (list, np.ndarray)):
+            return [
+                v.decode("utf-8", errors="replace") if isinstance(v, bytes) else str(v)
+                for v in vals
+            ]
+        return []
+    except Exception:
+        return []
+
+
+def get_metadata_array_int(reader: GGUFReader, key: str) -> list[int]:
+    """Extract an integer array from GGUF fields (e.g., token types)."""
+    field = reader.get_field(key)
+    if field is None:
+        return []
+    try:
+        vals = field.contents()
+        if isinstance(vals, (list, np.ndarray)):
+            return [int(v) for v in vals]
+        return []
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Architecture detection & config building
+# ---------------------------------------------------------------------------
+
+# Map GGUF architecture names to HuggingFace model types
+ARCH_MAP: dict[str, str] = {
+    "llama": "llama",
+    "mistral": "mistral",
+    "falcon": "falcon",
+    "mpt": "mpt",
+    "gptneox": "gpt_neox",
+    "gpt2": "gpt2",
+    "bert": "bert",
+    "bloom": "bloom",
+    "starcoder": "gpt_bigcode",
+    "refact": "refact",
+    "command-r": "cohere",
+    "qwen2": "qwen2",
+    "qwen2moe": "qwen2_moe",
+    "qwen3moe": "qwen3_moe",
+    "phi3": "phi3",
+    "phi": "phi",
+    "gemma": "gemma",
+    "gemma2": "gemma2",
+    "gemma3": "gemma3",
+    "stablelm": "stablelm",
+    "deepseek2": "deepseek_v2",
+    "deepseek3": "deepseek_v3",
+    "chatglm": "chatglm",
+    "baichuan": "baichuan",
+    "xverse": "xverse",
+    "orion": "orion",
+    "bitnet": "bitnet",
+    "plamo": "plamo",
+    "codeshell": "codeshell",
+    "minicpm": "minicpm",
+    "minicpm3": "minicpm3",
+    "t5": "t5",
+    "jais": "jais",
+}
+
+
+def detect_architecture(reader: GGUFReader) -> str:
+    """Detect model architecture from GGUF metadata."""
+    arch = get_metadata_str(reader, "general.architecture")
+    if arch:
+        return arch
+    # Try fallback based on model name
+    name = get_metadata_str(reader, "general.name")
+    if name:
+        name_lower = name.lower()
+        for gguf_arch, hf_name in ARCH_MAP.items():
+            if gguf_arch in name_lower:
+                return gguf_arch
+    return "llama"  # Safe default
+
+
+def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
+    """Build MLX-compatible config.json from GGUF metadata."""
+    # --- Basic params ---
+    vocab_size = get_metadata_int(reader, "llama.vocab_size") or get_metadata_int(
+        reader, f"{arch}.vocab_size"
+    )
+
+    # If vocab_size not in metadata, infer from tokenizer tokens
+    if vocab_size is None:
+        tokens = get_metadata_array_str(reader, "tokenizer.ggml.tokens")
+        if tokens:
+            vocab_size = len(tokens)
+        else:
+            vocab_size = 32000
+
+    hidden_size = get_metadata_int(reader, "llama.embedding_length") or get_metadata_int(
+        reader, f"{arch}.embedding_length"
+    ) or 4096
+
+    num_layers = get_metadata_int(reader, "llama.block_count") or get_metadata_int(
+        reader, f"{arch}.block_count"
+    ) or 32
+
+    num_heads = get_metadata_int(reader, "llama.attention.head_count") or get_metadata_int(
+        reader, f"{arch}.attention.head_count"
+    ) or 32
+
+    num_kv_heads = get_metadata_int(
+        reader, "llama.attention.head_count_kv"
+    ) or get_metadata_int(reader, f"{arch}.attention.head_count_kv") or num_heads
+
+    # MoE: expert feed-forward length may differ from shared FFN
+    if arch in ("qwen2moe", "qwen3moe", "deepseek2", "deepseek3"):
+        ffn_size = get_metadata_int(
+            reader, f"{arch}.expert_feed_forward_length"
+        ) or get_metadata_int(reader, f"{arch}.feed_forward_length") or (hidden_size * 4)
+        # Shared expert FFN (if present)
+        shared_ffn_size = get_metadata_int(
+            reader, f"{arch}.expert_shared_feed_forward_length"
+        ) or ffn_size
+    else:
+        ffn_size = get_metadata_int(reader, "llama.feed_forward_length") or get_metadata_int(
+            reader, f"{arch}.feed_forward_length"
+        ) or (hidden_size * 4)
+        shared_ffn_size = ffn_size
+
+    ctx_length = get_metadata_int(reader, "llama.context_length") or get_metadata_int(
+        reader, f"{arch}.context_length"
+    ) or 4096
+
+    rope_dim = get_metadata_int(reader, "llama.rope.dimension_count") or get_metadata_int(
+        reader, f"{arch}.rope.dimension_count"
+    ) or get_metadata_int(reader, f"{arch}.attention.key_length") or (hidden_size // num_heads)
+
+    rope_theta = get_metadata_float(reader, "llama.rope.freq_base") or get_metadata_float(
+        reader, f"{arch}.rope.freq_base"
+    ) or 10000.0
+
+    norm_eps = get_metadata_float(
+        reader, "llama.attention.layer_norm_rms_epsilon"
+    ) or get_metadata_float(reader, f"{arch}.attention.layer_norm_rms_epsilon") or 1e-6
+
+    file_type = get_metadata_int(reader, "general.file_type") or 1
+    model_name = get_metadata_str(reader, "general.name") or "unknown"
+    bos_id = get_metadata_int(reader, "tokenizer.ggml.bos_token_id") or 1
+    eos_id = get_metadata_int(reader, "tokenizer.ggml.eos_token_id") or 2
+
+    hf_model_type = ARCH_MAP.get(arch, arch)
+
+    # --- Build config ---
+    # Detect tied embeddings (many Qwen, Gemma, etc. models have this)
+    tie_embeddings = (
+        arch in ("qwen2", "qwen2moe", "gemma", "gemma2", "gemma3")
+    )
+
+    # Detect attention bias (Qwen, some Gemma, etc.)
+    attention_bias = arch in ("qwen2", "qwen2moe", "qwen3moe")
+
+    # Convert model_type to CamelCase architecture class name
+    arch_class = "".join(part.capitalize() for part in hf_model_type.split("_")) + "ForCausalLM"
+
+    config = {
+        "architectures": [arch_class],
+        "model_type": hf_model_type,
+        "hidden_size": hidden_size,
+        "intermediate_size": ffn_size,
+        "num_hidden_layers": num_layers,
+        "num_attention_heads": num_heads,
+        "num_key_value_heads": num_kv_heads,
+        "max_position_embeddings": ctx_length,
+        "rms_norm_eps": norm_eps,
+        "rope_theta": rope_theta,
+        "vocab_size": vocab_size,
+        "hidden_act": "silu",
+        "tie_word_embeddings": tie_embeddings,
+        "attention_bias": attention_bias,
+        "torch_dtype": "float16",
+        "transformers_version": "4.50.0",
+        "bos_token_id": bos_id,
+        "eos_token_id": eos_id,
+        # Extra metadata from source GGUF
+        "_gguf_architecture": arch,
+        "_gguf_file_type": file_type,
+        "_original_name": model_name,
+    }
+
+    # --- Architecture-specific overrides ---
+    if arch in ("qwen2moe", "deepseek2", "deepseek3", "qwen3moe"):
+        num_experts = get_metadata_int(reader, f"{arch}.expert_count") or 8
+        num_experts_per_tok = get_metadata_int(
+            reader, f"{arch}.expert_used_count"
+        ) or 2
+        config["num_experts"] = num_experts
+        config["num_experts_per_tok"] = num_experts_per_tok
+        config["model_type"] = {
+            "qwen2moe": "qwen2_moe",
+            "qwen3moe": "qwen3_moe",
+            "deepseek2": "deepseek_v2",
+            "deepseek3": "deepseek_v3",
+        }.get(arch, hf_model_type)
+
+        # MoE-specific config fields
+        config["moe_intermediate_size"] = ffn_size
+        config["norm_topk_prob"] = arch in ("qwen3moe",)
+        config["decoder_sparse_step"] = 1
+        config["mlp_only_layers"] = []
+
+        # Head dim (Qwen3, DeepSeek-V3 style)
+        head_dim = get_metadata_int(
+            reader, f"{arch}.attention.key_length"
+        ) or get_metadata_int(reader, f"{arch}.attention.value_length") or (hidden_size // num_heads)
+        if arch in ("qwen3moe", "deepseek3"):
+            config["head_dim"] = head_dim
+
+        # Shared expert config (Qwen3MoE, DeepSeek-V3)
+        if arch in ("qwen3moe", "deepseek3"):
+            config["shared_expert_intermediate_size"] = shared_ffn_size
+            config["output_router_logits"] = False
+            config["router_aux_loss_coef"] = 0.001
+
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Tensor name mapping: GGUF → MLX/HuggingFace
+# ---------------------------------------------------------------------------
+
+
+def _map_llama_tensor_name(gguf_name: str) -> str:
+    """Map a Llama-architecture GGUF tensor name to HuggingFace format."""
+    # Embedding
+    if gguf_name == "token_embd.weight":
+        return "model.embed_tokens.weight"
+
+    # Output
+    if gguf_name == "output.weight":
+        return "lm_head.weight"
+    if gguf_name == "output_norm.weight":
+        return "model.norm.weight"
+
+    # Blocks: blk.N.xxx → model.layers.N.xxx
+    if gguf_name.startswith("blk."):
+        parts = gguf_name.split(".", 2)
+        if len(parts) < 3:
+            return gguf_name
+        layer_idx = parts[1]
+        rest = parts[2]
+
+        # Attention weights
+        if rest == "attn_q.weight":
+            return f"model.layers.{layer_idx}.self_attn.q_proj.weight"
+        if rest == "attn_k.weight":
+            return f"model.layers.{layer_idx}.self_attn.k_proj.weight"
+        if rest == "attn_v.weight":
+            return f"model.layers.{layer_idx}.self_attn.v_proj.weight"
+        if rest == "attn_output.weight":
+            return f"model.layers.{layer_idx}.self_attn.o_proj.weight"
+
+        # Attention biases (some architectures have these)
+        if rest == "attn_q.bias":
+            return f"model.layers.{layer_idx}.self_attn.q_proj.bias"
+        if rest == "attn_k.bias":
+            return f"model.layers.{layer_idx}.self_attn.k_proj.bias"
+        if rest == "attn_v.bias":
+            return f"model.layers.{layer_idx}.self_attn.v_proj.bias"
+        if rest == "attn_output.bias":
+            return f"model.layers.{layer_idx}.self_attn.o_proj.bias"
+
+        # FFN
+        if rest == "ffn_gate.weight":
+            return f"model.layers.{layer_idx}.mlp.gate_proj.weight"
+        if rest == "ffn_up.weight":
+            return f"model.layers.{layer_idx}.mlp.up_proj.weight"
+        if rest == "ffn_down.weight":
+            return f"model.layers.{layer_idx}.mlp.down_proj.weight"
+
+        # MoE: expert router gate
+        if rest == "ffn_gate_inp.weight":
+            return f"model.layers.{layer_idx}.mlp.gate.weight"
+
+        # MoE: stacked expert weights (3D: [num_experts, out, in])
+        # mlx-lm expects switch_mlp.*.weight for stacked format
+        if rest == "ffn_gate_exps.weight":
+            return f"model.layers.{layer_idx}.mlp.switch_mlp.gate_proj.weight"
+        if rest == "ffn_down_exps.weight":
+            return f"model.layers.{layer_idx}.mlp.switch_mlp.down_proj.weight"
+        if rest == "ffn_up_exps.weight":
+            return f"model.layers.{layer_idx}.mlp.switch_mlp.up_proj.weight"
+
+        # QK normalization (Qwen3, Qwen3MoE)
+        if rest == "attn_q_norm.weight":
+            return f"model.layers.{layer_idx}.self_attn.q_norm.weight"
+        if rest == "attn_k_norm.weight":
+            return f"model.layers.{layer_idx}.self_attn.k_norm.weight"
+
+        # Norms
+        if rest == "attn_norm.weight":
+            return f"model.layers.{layer_idx}.input_layernorm.weight"
+        if rest == "ffn_norm.weight":
+            return f"model.layers.{layer_idx}.post_attention_layernorm.weight"
+        if rest == "attn_norm_2.weight":
+            return f"model.layers.{layer_idx}.input_layernorm.weight"
+
+        # Norm biases (rare but possible)
+        if rest == "attn_norm.bias":
+            return f"model.layers.{layer_idx}.input_layernorm.bias"
+        if rest == "ffn_norm.bias":
+            return f"model.layers.{layer_idx}.post_attention_layernorm.bias"
+
+    return gguf_name
+
+
+def _map_tensor_name(gguf_name: str, arch: str) -> str:
+    """Map a GGUF tensor name to HuggingFace format based on architecture."""
+    # Most architectures follow llama naming for now
+    return _map_llama_tensor_name(gguf_name)
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer extraction
+# ---------------------------------------------------------------------------
+
+
+def extract_tokenizer(reader: GGUFReader, output_dir: Path) -> None:
+    """Extract tokenizer from GGUF metadata and save standard files."""
+    model_type = get_metadata_str(reader, "tokenizer.ggml.model") or "bpe"
+    bos_id = get_metadata_int(reader, "tokenizer.ggml.bos_token_id") or 1
+    eos_id = get_metadata_int(reader, "tokenizer.ggml.eos_token_id") or 2
+    pad_id = get_metadata_int(reader, "tokenizer.ggml.padding_token_id") or 0
+
+    tokens = get_metadata_array_str(reader, "tokenizer.ggml.tokens")
+    token_types = get_metadata_array_int(reader, "tokenizer.ggml.token_type")
+    merges = get_metadata_array_str(reader, "tokenizer.ggml.merges")
+    scores = [
+        float(s)
+        for s in get_metadata_array_str(reader, "tokenizer.ggml.scores")
+    ] if reader.get_field("tokenizer.ggml.scores") else []
+
+    if not tokens:
+        print("  ⚠ No tokenizer tokens found in GGUF — creating minimal tokenizer")
+        tokens = ["<unk>", "<s>", "</s>", "<pad>"]
+        token_types = [0, 3, 3, 3]
+        bos_id, eos_id, pad_id = 1, 2, 3
+
+    # --- Fix BOS/EOS for Qwen family ---
+    # Qwen models use <|endoftext|> (151643) as BOS and <|im_end|> (151645) as EOS.
+    # Many GGUF files omit bos_token_id or set it to 1 (wrong). Fix it here.
+    if tokens and (bos_id in (0, 1, 2, 3) or bos_id is None):
+        # Try to find <|endoftext|> in tokens
+        for i, tok in enumerate(tokens):
+            if tok == "<|endoftext|>":
+                bos_id = i
+                print(f"  ✓ Fixed bos_token_id: {bos_id} (<|endoftext|>)")
+                break
+    if tokens and (eos_id in (0, 1, 2, 3) or eos_id is None):
+        # Try to find <|im_end|> in tokens
+        for i, tok in enumerate(tokens):
+            if tok == "<|im_end|>":
+                eos_id = i
+                print(f"  ✓ Fixed eos_token_id: {eos_id} (<|im_end|>)")
+                break
+
+    vocab_size = len(tokens)
+    print(f"  Extracted tokenizer: {vocab_size} tokens, model={model_type}")
+
+    # --- tokenizer_config.json ---
+    tokenizer_config = {
+        "add_bos_token": True,
+        "add_eos_token": False,
+        "bos_token": tokens[bos_id] if bos_id < vocab_size else "<s>",
+        "eos_token": tokens[eos_id] if eos_id < vocab_size else "</s>",
+        "unk_token": tokens[0] if tokens else "<unk>",
+        "pad_token": tokens[pad_id] if pad_id < vocab_size else "<pad>",
+        "model_max_length": 131072,
+        "tokenizer_class": "PreTrainedTokenizerFast",
+        "clean_up_tokenization_spaces": False,
+    }
+
+    if model_type == "llama" or model_type == "bpe":
+        tokenizer_config.update(
+            {
+                "model_type": "bpe",
+                "tokenizer_class": "LlamaTokenizerFast"
+                if "llama" in model_type
+                else "PreTrainedTokenizerFast",
+            }
+        )
+
+    with open(output_dir / "tokenizer_config.json", "w") as f:
+        json.dump(tokenizer_config, f, indent=2, ensure_ascii=False)
+    print(f"  ✓ Saved tokenizer_config.json")
+
+    # --- special_tokens_map.json ---
+    special_tokens = {
+        "bos_token": tokens[bos_id] if bos_id < vocab_size else "<s>",
+        "eos_token": tokens[eos_id] if eos_id < vocab_size else "</s>",
+        "unk_token": tokens[0] if tokens else "<unk>",
+    }
+    if pad_id < vocab_size and tokens[pad_id]:
+        special_tokens["pad_token"] = tokens[pad_id]
+
+    with open(output_dir / "special_tokens_map.json", "w") as f:
+        json.dump(special_tokens, f, indent=2, ensure_ascii=False)
+    print(f"  ✓ Saved special_tokens_map.json")
+
+    # --- vocab.json (word → id mapping) ---
+    vocab = {}
+    for i, token in enumerate(tokens):
+        if i < vocab_size:
+            # Normalize token: GGUF stores bytes, HF expects strings
+            if isinstance(token, str):
+                vocab[token] = i
+
+    with open(output_dir / "vocab.json", "w") as f:
+        json.dump(vocab, f, indent=2, ensure_ascii=False)
+    print(f"  ✓ Saved vocab.json ({len(vocab)} entries)")
+
+    # --- merges.txt (for BPE tokenizers) ---
+    if model_type in ("bpe", "gpt2") and merges:
+        # GGUF stores merges with space characters
+        merges_path = output_dir / "merges.txt"
+        with open(merges_path, "w") as f:
+            # No version header — HuggingFace GPT-2 tokenizer expects raw merges
+            for merge in merges:
+                if isinstance(merge, bytes):
+                    merge = merge.decode("utf-8", errors="replace")
+                f.write(merge + "\n")
+        print(f"  ✓ Saved merges.txt ({len(merges)} merges)")
+
+    # --- tokenizer.json (for fast tokenizers) ---
+    tokenizer_json = _build_tokenizer_json(
+        tokens, token_types, merges, scores, model_type, bos_id, eos_id, pad_id
+    )
+    if tokenizer_json:
+        with open(output_dir / "tokenizer.json", "w") as f:
+            json.dump(tokenizer_json, f, indent=2, ensure_ascii=False)
+        print(f"  ✓ Saved tokenizer.json")
+
+
+def _build_tokenizer_json(
+    tokens: list[str],
+    token_types: list[int],
+    merges: list[str],
+    scores: list[float],
+    model_type: str,
+    bos_id: int,
+    eos_id: int,
+    pad_id: int,
+) -> dict:
+    """Build a complete tokenizer.json for HuggingFace tokenizers."""
+    vocab = {}
+    for i, token in enumerate(tokens):
+        vocab[token] = i
+
+    # Token type mapping: 1=normal, 2=unknown, 3=control, 4=user_defined, 5=unused, 6=byte
+    token_type_map = {
+        1: "Normal",
+        2: "Unknown",
+        3: "Control",
+        4: "UserDefined",
+        5: "Unused",
+        6: "Byte",
+    }
+
+    added_tokens = []
+    normal_tokens = []
+    for i, token in enumerate(tokens):
+        tt = token_types[i] if i < len(token_types) else 1
+        # Control/special tokens go in added_tokens
+        if tt in (3,) or i in (bos_id, eos_id, pad_id):
+            special = i in (bos_id, eos_id, pad_id)
+            added_tokens.append(
+                {
+                    "id": i,
+                    "content": token,
+                    "single_word": False,
+                    "lstrip": False,
+                    "rstrip": False,
+                    "normalized": False,
+                    "special": special,
+                }
+            )
+        else:
+            normal_tokens.append(token)
+
+    # Build model block
+    if model_type in ("bpe", "gpt2"):
+        model_block = {
+            "type": "BPE",
+            "dropout": None,
+            "unk_token": tokens[0] if tokens else "<unk>",
+            "continuing_subword_prefix": "",
+            "end_of_word_suffix": "",
+            "fuse_unk": False,
+            "byte_fallback": False,
+            "vocab": vocab,
+            "merges": merges if merges else [],
+        }
+    elif model_type == "llama":
+        model_block = {
+            "type": "BPE",
+            "dropout": None,
+            "unk_token": None,
+            "continuing_subword_prefix": "▁",
+            "end_of_word_suffix": "",
+            "fuse_unk": False,
+            "byte_fallback": False,
+            "vocab": vocab,
+            "merges": merges if merges else [],
+        }
+    else:
+        # Generic fallback
+        model_block = {
+            "type": "BPE",
+            "vocab": vocab,
+            "merges": merges if merges else [],
+        }
+
+    tokenizer_json = {
+        "version": "1.0",
+        "truncation": None,
+        "padding": None,
+        "added_tokens": added_tokens,
+        "normalizer": {"type": "NFC"},
+        "pre_tokenizer": {
+            "type": "Sequence",
+            "pretokenizers": [
+                {
+                    "type": "Split",
+                    "pattern": {
+                        "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+                    },
+                    "behavior": "Isolated",
+                    "invert": False,
+                },
+                {
+                    "type": "ByteLevel",
+                    "add_prefix_space": False,
+                    "trim_offsets": False,
+                    "use_regex": False,
+                },
+            ],
+        },
+        "post_processor": {
+            "type": "ByteLevel",
+            "add_prefix_space": False,
+            "trim_offsets": False,
+            "use_regex": False,
+        },
+        "decoder": {
+            "type": "ByteLevel",
+            "add_prefix_space": False,
+            "trim_offsets": False,
+            "use_regex": False,
+        },
+        "model": model_block,
+    }
+
+    return tokenizer_json
+
+
+# ---------------------------------------------------------------------------
+# Weight extraction & conversion
+# ---------------------------------------------------------------------------
+
+
+def extract_and_convert_weights(
+    reader: GGUFReader, arch: str, output_dir: Path, dtype: str = "float16"
+) -> dict[str, np.ndarray]:
+    """Extract GGUF tensors, dequantize, rename, and save as safetensors."""
+
+    print(f"\n  Converting {len(reader.tensors)} tensors...")
+    print(f"  Output dtype: {dtype}")
+
+    np_dtype = np.float16 if dtype == "float16" else np.float32
+    weights: dict[str, np.ndarray] = {}
+    all_keys: list[str] = []
+
+    skipped = 0
+    total_bytes_in = 0
+    total_bytes_out = 0
+    shard_idx = 1
+
+    def _flush_shard(shard_weights: dict[str, np.ndarray], shard_idx: int) -> tuple[int, int]:
+        """Write current weight dict to a safetensors shard and return bytes written."""
+        if not shard_weights:
+            return 0, 0
+        path = output_dir / f"model-{shard_idx:05d}-of-NNNNN.safetensors"
+        save_safetensors(shard_weights, str(path))
+        n_keys = len(shard_weights)
+        n_bytes = sum(arr.nbytes for arr in shard_weights.values())
+        shard_weights.clear()
+        import gc
+        gc.collect()
+        return n_keys, n_bytes
+
+    for i, tensor in enumerate(reader.tensors):
+        gguf_name = tensor.name
+        hf_name = _map_tensor_name(gguf_name, arch)
+        qtype = tensor.tensor_type
+        logical_shape = tuple(tensor.shape)
+        n_bytes = tensor.n_bytes
+        total_bytes_in += n_bytes
+
+        # Progress indicator
+        if (i + 1) % 50 == 0 or i == 0:
+            print(f"    [{i + 1}/{len(reader.tensors)}] Processing...")
+
+        try:
+            # Dequantize if needed
+            qtype_val = int(qtype) if hasattr(qtype, "value") else int(qtype)
+            raw_data = tensor.data
+
+            if qtype_val == 0:  # F32
+                arr = np.array(raw_data, dtype=np.float32).reshape(logical_shape)
+                if dtype == "float16":
+                    arr = arr.astype(np.float16)
+                # F32/F16 tensors use GGUF layout [in_features, out_features],
+                # need transpose to HF layout [out_features, in_features]
+                if arr.ndim == 2:
+                    arr = arr.T
+            elif qtype_val == 1:  # F16
+                arr = np.array(raw_data, dtype=np.float16).reshape(logical_shape)
+                if arr.ndim == 2:
+                    arr = arr.T
+            elif qtype_val == 28:  # F64
+                arr = np.array(raw_data, dtype=np.float64).reshape(logical_shape)
+                if arr.ndim == 2:
+                    arr = arr.T
+                arr = arr.astype(np_dtype)
+            elif qtype_val in (24, 25, 26, 27):  # I8, I16, I32, I64
+                int_dtype_map = {24: np.int8, 25: np.int16, 26: np.int32, 27: np.int64}
+                arr = np.array(raw_data, dtype=int_dtype_map.get(qtype_val, np.int32))
+                arr = arr.reshape(logical_shape).astype(np_dtype)
+                if arr.ndim == 2:
+                    arr = arr.T
+            else:
+                # Quantized: gguf's dequantize already returns [out_features, in_features]
+                # (HF layout), so don't reshape or transpose
+                try:
+                    ggml_qtype = (
+                        qtype if isinstance(qtype, GGMLQuantizationType) else GGMLQuantizationType(qtype_val)
+                    )
+                    arr = dequantize(raw_data, ggml_qtype)
+                    # dequantize already returns correct shape, no .reshape needed
+                    arr = arr.astype(np_dtype)
+                except Exception as e:
+                    print(f"    ⚠ Failed to dequantize {gguf_name} ({qtype}): {e}")
+                    skipped += 1
+                    continue
+
+            weights[hf_name] = arr
+            all_keys.append(hf_name)
+            total_bytes_out += arr.nbytes
+
+            # Flush shard periodically to avoid OOM with large models
+            # Flush after 3D expert tensors (they're the biggest) or every 50 tensors
+            flush_threshold = 5 if arr.ndim == 3 else 50
+            if sum(1 for v in weights.values() if v.ndim == 3) >= 3:
+                n_keys, n_bytes = _flush_shard(weights, shard_idx)
+                if n_keys:
+                    print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
+                    shard_idx += 1
+                    weights = {}
+            elif len(weights) >= flush_threshold:
+                # Check estimated memory: if > 4 GB, flush
+                est_gb = sum(arr.nbytes for arr in weights.values()) / 1e9
+                if est_gb > 4.0:
+                    n_keys, n_bytes = _flush_shard(weights, shard_idx)
+                    if n_keys:
+                        print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
+                        shard_idx += 1
+                        weights = {}
+
+        except Exception as e:
+            print(f"    ⚠ Error processing {gguf_name}: {e}")
+            skipped += 1
+            continue
+
+    # --- Save remaining tensors as final shard ---
+    if weights:
+        n_keys, n_bytes = _flush_shard(weights, shard_idx)
+        if n_keys:
+            print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
+            shard_idx += 1
+            weights = {}
+
+    if not all_keys:
+        raise RuntimeError("No weights extracted!")
+
+    # --- Rename shards to final sequential names ---
+    import glob
+    shard_files = sorted(
+        output_dir.glob("model-*-of-NNNNN.safetensors"),
+        key=lambda p: int(p.stem.split("-")[1])
+    )
+    total_shards = len(shard_files)
+    weight_map: dict[str, str] = {}
+
+    for i, old_path in enumerate(shard_files, 1):
+        new_name = f"model-{i:05d}-of-{total_shards:05d}.safetensors"
+        new_path = output_dir / new_name
+        old_path.rename(new_path)
+
+        # Read keys from shard to build weight map
+        with safe_open(str(new_path), framework="np") as f:
+            for key in f.keys():
+                weight_map[key] = new_name
+
+    # --- Save index ---
+    index_json = {
+        "metadata": {"total_size": total_bytes_out},
+        "weight_map": weight_map,
+    }
+    with open(output_dir / "model.safetensors.index.json", "w") as f:
+        json.dump(index_json, f, indent=2)
+
+    print(f"\n  ✓ Saved {len(all_keys)} weight tensors ({total_shards} shards)")
+    print(f"    Total input:  {total_bytes_in / 1e9:.2f} GB (GGUF)")
+    print(f"    Total output: {total_bytes_out / 1e9:.2f} GB (safetensors)")
+    if skipped:
+        print(f"    ⚠ Skipped {skipped} tensors due to errors")
+
+    return weights
+
+
+# ---------------------------------------------------------------------------
+# Main conversion
+# ---------------------------------------------------------------------------
+
+
+def convert(gguf_path: str, output_dir: str, dtype: str = "float16") -> bool:
+    """Convert a GGUF file to MLX-compatible safetensors format."""
+
+    gguf_file = Path(gguf_path)
+    if not gguf_file.exists():
+        print(f"❌ GGUF file not found: {gguf_path}")
+        return False
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    model_name = gguf_file.stem
+
+    print("=" * 60)
+    print(f"GGUF → MLX Converter v2.0")
+    print(f"  Model: {model_name}")
+    print(f"  Output: {output_path}")
+    print("=" * 60)
+
+    # Step 1: Open GGUF
+    print("\n[1/5] Reading GGUF file...")
+    reader = GGUFReader(str(gguf_path))
+    print(
+        f"  ✓ GGUF version {reader.fields['GGUF.version'].contents()}, "
+        f"{len(reader.tensors)} tensors, "
+        f"{len(reader.fields)} metadata fields"
+    )
+    print(f"  File size: {gguf_file.stat().st_size / 1e9:.2f} GB")
+
+    # Step 2: Detect architecture & build config
+    print("\n[2/5] Detecting architecture...")
+    arch = detect_architecture(reader)
+    hf_type = ARCH_MAP.get(arch, arch)
+    model_name_full = get_metadata_str(reader, "general.name") or model_name
+    print(f"  Architecture: {arch} (HF type: {hf_type})")
+    print(f"  Model name:   {model_name_full}")
+
+    config = build_config(reader, arch)
+    print(
+        f"  Config: {config['num_hidden_layers']} layers, "
+        f"{config['hidden_size']} hidden, "
+        f"{config['num_attention_heads']} heads, "
+        f"{config['vocab_size']} vocab"
+    )
+    if "num_experts" in config:
+        print(f"  MoE: {config['num_experts']} experts, top-{config['num_experts_per_tok']}")
+
+    try:
+        file_type = reader.get_field("general.file_type")
+        if file_type:
+            ft = file_type.contents()
+            ft_names = {
+                1: "F16", 2: "Q4_0", 3: "Q4_1",
+                7: "Q8_0", 10: "Q2_K", 12: "Q4_K",
+                13: "Q5_K", 14: "Q6_K", 16: "IQ2_XXS",
+                17: "IQ2_XS", 19: "IQ1_S", 20: "IQ4_NL",
+            }
+            print(f"  Source quantization: {ft_names.get(int(ft), f'unknown({ft})')}")
+    except Exception:
+        pass
+
+    # Save config
+    with open(output_path / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+    print("  ✓ Saved config.json")
+
+    # Step 3: Extract tokenizer
+    print("\n[3/5] Extracting tokenizer...")
+    extract_tokenizer(reader, output_path)
+
+    # Step 4: Extract, dequantize, and convert weights
+    print(f"\n[4/5] Extracting and converting weights...")
+    try:
+        extract_and_convert_weights(reader, arch, output_path, dtype)
+    except Exception as e:
+        print(f"❌ Weight extraction failed: {e}")
+        return False
+
+    # Step 5: Verify output
+    print(f"\n[5/5] Finalizing...")
+    # Index file already created by extract_and_convert_weights
+    index_path = output_path / "model.safetensors.index.json"
+    if not index_path.exists():
+        print(f"❌ model.safetensors.index.json was not created")
+        return False
+
+    with open(index_path) as f:
+        index_data = json.load(f)
+    num_keys = len(index_data.get("weight_map", {}))
+    print(f"  ✓ Index file: {num_keys} keys across {len(set(index_data['weight_map'].values()))} shards")
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("✅ Conversion complete!")
+    print(f"  Output directory: {output_path}")
+    print(f"  Architecture:     {arch} → {hf_type}")
+    print(f"  Files generated:")
+    for f_path in sorted(output_path.iterdir()):
+        size = f_path.stat().st_size
+        if size > 1_000_000_000:
+            size_str = f"{size / 1e9:.2f} GB"
+        elif size > 1_000_000:
+            size_str = f"{size / 1e6:.1f} MB"
+        elif size > 1000:
+            size_str = f"{size / 1000:.1f} KB"
+        else:
+            size_str = f"{size} B"
+        print(f"    - {f_path.name} ({size_str})")
+    print("=" * 60)
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="GGUF to MLX Converter — Convert GGUF models to MLX safetensors format"
+    )
+    parser.add_argument(
+        "--input", "-i", required=True, help="Input GGUF file path"
+    )
+    parser.add_argument(
+        "--output", "-o", help="Output MLX directory"
+    )
+    parser.add_argument(
+        "--dtype",
+        default="float16",
+        choices=["float16", "float32"],
+        help="Output data type (default: float16)",
+    )
+    parser.add_argument(
+        "--skip-weights",
+        action="store_true",
+        help="Skip weight extraction (metadata + tokenizer only, for inspection)",
+    )
+
+    args = parser.parse_args()
+
+    if args.skip_weights:
+        # Just dump info
+        reader = GGUFReader(args.input)
+        print(f"Architecture: {detect_architecture(reader)}")
+        print(f"Tensors: {len(reader.tensors)}")
+        print(f"Fields: {len(reader.fields)}")
+        for name in sorted(reader.fields.keys()):
+            print(f"  {name}")
+        return
+
+    success = convert(args.input, args.output, args.dtype)
+    if not success:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
