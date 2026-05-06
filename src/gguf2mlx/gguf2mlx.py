@@ -139,6 +139,7 @@ ARCH_MAP: dict[str, str] = {
     "starcoder": "gpt_bigcode",
     "refact": "refact",
     "command-r": "cohere",
+    "command-r-plus": "cohere",
     "qwen2": "qwen2",
     "qwen2moe": "qwen2_moe",
     "qwen3moe": "qwen3_moe",
@@ -161,6 +162,17 @@ ARCH_MAP: dict[str, str] = {
     "minicpm3": "minicpm3",
     "t5": "t5",
     "jais": "jais",
+    "olmo": "olmo",
+    "olmo2": "olmo2",
+    "openelm": "openelm",
+    "dbrx": "dbrx",
+    "grok-1": "grok",
+    "arctic": "arctic",
+    "nemotron": "nemotron",
+    "exaone": "exaone",
+    "granite": "granite",
+    "smolm": "smolm",
+    "chameleon": "chameleon",
 }
 
 
@@ -181,6 +193,10 @@ def detect_architecture(reader: GGUFReader) -> str:
 
 def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
     """Build MLX-compatible config.json from GGUF metadata."""
+
+    def _warn(key: str, value: Any) -> None:
+        warnings.warn(f"  ⚠ '{key}' not found in GGUF metadata, using default: {value}")
+
     # --- Basic params ---
     vocab_size = get_metadata_int(reader, "llama.vocab_size") or get_metadata_int(
         reader, f"{arch}.vocab_size"
@@ -193,25 +209,35 @@ def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
             vocab_size = len(tokens)
         else:
             vocab_size = 32000
+            _warn("vocab_size", 32000)
 
     hidden_size = get_metadata_int(reader, "llama.embedding_length") or get_metadata_int(
         reader, f"{arch}.embedding_length"
-    ) or 4096
+    )
+    if hidden_size is None:
+        hidden_size = 4096
+        _warn("embedding_length", 4096)
 
     num_layers = get_metadata_int(reader, "llama.block_count") or get_metadata_int(
         reader, f"{arch}.block_count"
-    ) or 32
+    )
+    if num_layers is None:
+        num_layers = 32
+        _warn("block_count", 32)
 
     num_heads = get_metadata_int(reader, "llama.attention.head_count") or get_metadata_int(
         reader, f"{arch}.attention.head_count"
-    ) or 32
+    )
+    if num_heads is None:
+        num_heads = 32
+        _warn("head_count", 32)
 
     num_kv_heads = get_metadata_int(
         reader, "llama.attention.head_count_kv"
     ) or get_metadata_int(reader, f"{arch}.attention.head_count_kv") or num_heads
 
     # MoE: expert feed-forward length may differ from shared FFN
-    if arch in ("qwen2moe", "qwen3moe", "deepseek2", "deepseek3"):
+    if arch in ("qwen2moe", "qwen3moe", "deepseek2", "deepseek3", "dbrx", "grok-1"):
         ffn_size = get_metadata_int(
             reader, f"{arch}.expert_feed_forward_length"
         ) or get_metadata_int(reader, f"{arch}.feed_forward_length") or (hidden_size * 4)
@@ -222,12 +248,17 @@ def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
     else:
         ffn_size = get_metadata_int(reader, "llama.feed_forward_length") or get_metadata_int(
             reader, f"{arch}.feed_forward_length"
-        ) or (hidden_size * 4)
+        )
+        if ffn_size is None:
+            ffn_size = hidden_size * 4
         shared_ffn_size = ffn_size
 
     ctx_length = get_metadata_int(reader, "llama.context_length") or get_metadata_int(
         reader, f"{arch}.context_length"
-    ) or 4096
+    )
+    if ctx_length is None:
+        ctx_length = 4096
+        _warn("context_length", 4096)
 
     rope_dim = get_metadata_int(reader, "llama.rope.dimension_count") or get_metadata_int(
         reader, f"{arch}.rope.dimension_count"
@@ -235,11 +266,15 @@ def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
 
     rope_theta = get_metadata_float(reader, "llama.rope.freq_base") or get_metadata_float(
         reader, f"{arch}.rope.freq_base"
-    ) or 10000.0
+    )
+    if rope_theta is None:
+        rope_theta = 10000.0
 
     norm_eps = get_metadata_float(
         reader, "llama.attention.layer_norm_rms_epsilon"
-    ) or get_metadata_float(reader, f"{arch}.attention.layer_norm_rms_epsilon") or 1e-6
+    ) or get_metadata_float(reader, f"{arch}.attention.layer_norm_rms_epsilon")
+    if norm_eps is None:
+        norm_eps = 1e-6
 
     file_type = get_metadata_int(reader, "general.file_type") or 1
     model_name = get_metadata_str(reader, "general.name") or "unknown"
@@ -250,12 +285,16 @@ def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
 
     # --- Build config ---
     # Detect tied embeddings (many Qwen, Gemma, etc. models have this)
-    tie_embeddings = (
-        arch in ("qwen2", "qwen2moe", "gemma", "gemma2", "gemma3")
+    tie_embeddings = arch in (
+        "qwen2", "qwen2moe", "gemma", "gemma2", "gemma3",
+        "olmo", "olmo2", "openelm",
     )
 
-    # Detect attention bias (Qwen, some Gemma, etc.)
-    attention_bias = arch in ("qwen2", "qwen2moe", "qwen3moe")
+    # Detect attention bias (Qwen, Gemma, etc.)
+    attention_bias = arch in (
+        "qwen2", "qwen2moe", "qwen3moe",
+        "gemma", "gemma2", "gemma3",
+    )
 
     # Convert model_type to CamelCase architecture class name
     arch_class = "".join(part.capitalize() for part in hf_model_type.split("_")) + "ForCausalLM"
@@ -286,7 +325,7 @@ def build_config(reader: GGUFReader, arch: str) -> dict[str, Any]:
     }
 
     # --- Architecture-specific overrides ---
-    if arch in ("qwen2moe", "deepseek2", "deepseek3", "qwen3moe"):
+    if arch in ("qwen2moe", "deepseek2", "deepseek3", "qwen3moe", "dbrx", "grok-1"):
         num_experts = get_metadata_int(reader, f"{arch}.expert_count") or 8
         num_experts_per_tok = get_metadata_int(
             reader, f"{arch}.expert_used_count"
@@ -443,23 +482,56 @@ def extract_tokenizer(reader: GGUFReader, output_dir: Path) -> None:
         token_types = [0, 3, 3, 3]
         bos_id, eos_id, pad_id = 1, 2, 3
 
-    # --- Fix BOS/EOS for Qwen family ---
-    # Qwen models use <|endoftext|> (151643) as BOS and <|im_end|> (151645) as EOS.
-    # Many GGUF files omit bos_token_id or set it to 1 (wrong). Fix it here.
-    if tokens and (bos_id in (0, 1, 2, 3) or bos_id is None):
-        # Try to find <|endoftext|> in tokens
-        for i, tok in enumerate(tokens):
-            if tok == "<|endoftext|>":
-                bos_id = i
-                print(f"  ✓ Fixed bos_token_id: {bos_id} (<|endoftext|>)")
+    # --- Fix BOS/EOS for Qwen, DeepSeek, and similar families ---
+    # These models use special tokens like <|endoftext|> (BOS) and <|im_end|> (EOS)
+    # but GGUF files often omit bos_token_id / eos_token_id, or set them to wrong defaults (1, 2).
+    #
+    # Known special token names by role:
+    SPECIAL_BOS_CANDIDATES = [
+        "<|endoftext|>", "<s>", "<|begin_of_text|>", "<|startoftext|>",
+    ]
+    SPECIAL_EOS_CANDIDATES = [
+        "<|im_end|>", "</s>", "<|end_of_text|>", "<|eot_id|>", "<|end|>",
+    ]
+
+    if tokens and (bos_id in (None, 0, 1, 2, 3)):
+        found = False
+        for candidate in SPECIAL_BOS_CANDIDATES:
+            if candidate in tokens:
+                bos_id = tokens.index(candidate)
+                print(f"  ✓ Fixed bos_token_id: {bos_id} ({candidate})")
+                found = True
                 break
-    if tokens and (eos_id in (0, 1, 2, 3) or eos_id is None):
-        # Try to find <|im_end|> in tokens
-        for i, tok in enumerate(tokens):
-            if tok == "<|im_end|>":
-                eos_id = i
-                print(f"  ✓ Fixed eos_token_id: {eos_id} (<|im_end|>)")
+        if not found:
+            # Try uppercase versions
+            for candidate in SPECIAL_BOS_CANDIDATES:
+                for i, tok in enumerate(tokens):
+                    if tok.upper() == candidate.upper():
+                        bos_id = i
+                        print(f"  ✓ Fixed bos_token_id: {bos_id} ({tok})")
+                        found = True
+                        break
+                if found:
+                    break
+
+    if tokens and (eos_id in (None, 0, 1, 2, 3)):
+        found = False
+        for candidate in SPECIAL_EOS_CANDIDATES:
+            if candidate in tokens:
+                eos_id = tokens.index(candidate)
+                print(f"  ✓ Fixed eos_token_id: {eos_id} ({candidate})")
+                found = True
                 break
+        if not found:
+            for candidate in SPECIAL_EOS_CANDIDATES:
+                for i, tok in enumerate(tokens):
+                    if tok.upper() == candidate.upper():
+                        eos_id = i
+                        print(f"  ✓ Fixed eos_token_id: {eos_id} ({tok})")
+                        found = True
+                        break
+                if found:
+                    break
 
     vocab_size = len(tokens)
     print(f"  Extracted tokenizer: {vocab_size} tokens, model={model_type}")
@@ -681,19 +753,31 @@ def extract_and_convert_weights(
     total_bytes_in = 0
     total_bytes_out = 0
     shard_idx = 1
+    current_shard_bytes = 0
+    max_shard_bytes = int(4.5 * 1e9)  # 4.5 GB per shard max for safetensors
 
-    def _flush_shard(shard_weights: dict[str, np.ndarray], shard_idx: int) -> tuple[int, int]:
-        """Write current weight dict to a safetensors shard and return bytes written."""
+    # Progress bar
+    pbar = tqdm(total=len(reader.tensors), desc="  Converting", unit="tensor")
+
+    def _shard_filename(idx: int, total_final: int | None = None) -> str:
+        """Generate shard filename. When total is unknown, use NNNNN placeholder."""
+        if total_final is None:
+            return f"model-{idx:05d}-of-NNNNN.safetensors"
+        return f"model-{idx:05d}-of-{total_final:05d}.safetensors"
+
+    def _flush_shard(
+        shard_weights: dict[str, np.ndarray], shard_idx: int, total_shards: int | None
+    ) -> int:
+        """Write current shard to disk, clear dict, return bytes written. Returns byte count."""
         if not shard_weights:
-            return 0, 0
-        path = output_dir / f"model-{shard_idx:05d}-of-NNNNN.safetensors"
+            return 0
+        path = output_dir / _shard_filename(shard_idx, total_shards)
         save_safetensors(shard_weights, str(path))
         n_keys = len(shard_weights)
         n_bytes = sum(arr.nbytes for arr in shard_weights.values())
         shard_weights.clear()
-        import gc
         gc.collect()
-        return n_keys, n_bytes
+        return n_bytes
 
     for i, tensor in enumerate(reader.tensors):
         gguf_name = tensor.name
@@ -753,44 +837,35 @@ def extract_and_convert_weights(
             weights[hf_name] = arr
             all_keys.append(hf_name)
             total_bytes_out += arr.nbytes
+            current_shard_bytes += arr.nbytes
+            pbar.update(1)
 
-            # Flush shard periodically to avoid OOM with large models
-            # Flush after 3D expert tensors (they're the biggest) or every 50 tensors
-            flush_threshold = 5 if arr.ndim == 3 else 50
-            if sum(1 for v in weights.values() if v.ndim == 3) >= 3:
-                n_keys, n_bytes = _flush_shard(weights, shard_idx)
-                if n_keys:
-                    print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
-                    shard_idx += 1
-                    weights = {}
-            elif len(weights) >= flush_threshold:
-                # Check estimated memory: if > 4 GB, flush
-                est_gb = sum(arr.nbytes for arr in weights.values()) / 1e9
-                if est_gb > 4.0:
-                    n_keys, n_bytes = _flush_shard(weights, shard_idx)
-                    if n_keys:
-                        print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
-                        shard_idx += 1
-                        weights = {}
+            # Shard when approaching the per-shard byte limit
+            if current_shard_bytes >= max_shard_bytes:
+                n_bytes = _flush_shard(weights, shard_idx, None)
+                print(f"\n    ✓ Shard {shard_idx}: {len(all_keys)} tensors so far, {n_bytes / 1e9:.2f} GB")
+                shard_idx += 1
+                current_shard_bytes = 0
+                weights = {}
 
         except Exception as e:
             print(f"    ⚠ Error processing {gguf_name}: {e}")
             skipped += 1
             continue
 
+    pbar.close()
+
     # --- Save remaining tensors as final shard ---
     if weights:
-        n_keys, n_bytes = _flush_shard(weights, shard_idx)
-        if n_keys:
-            print(f"    ✓ Shard {shard_idx}: {n_keys} tensors, {n_bytes / 1e9:.2f} GB")
+        n_bytes = _flush_shard(weights, shard_idx, None)
+        if n_bytes:
+            print(f"    ✓ Shard {shard_idx}: {len(all_keys)} tensors total, {n_bytes / 1e9:.2f} GB")
             shard_idx += 1
-            weights = {}
 
     if not all_keys:
         raise RuntimeError("No weights extracted!")
 
-    # --- Rename shards to final sequential names ---
-    import glob
+    # --- Rename shards with correct total-count filenames ---
     shard_files = sorted(
         output_dir.glob("model-*-of-NNNNN.safetensors"),
         key=lambda p: int(p.stem.split("-")[1])
