@@ -10,9 +10,11 @@ Phase 1: Real weight extraction, safetensors output, architecture detection,
 import argparse
 import json
 import os
+import gc
 import sys
 from pathlib import Path
 from typing import Any, Optional
+from tqdm import tqdm
 
 import numpy as np
 
